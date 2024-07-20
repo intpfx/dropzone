@@ -45,220 +45,7 @@ function isLocalNetwork(ip) {
 	return false;
 }
 
-class DropzoneServer {
-	constructor() {
-		onProcess();
-		this._rooms = {};
-		Deno.serve((request, info) => {
-			const url = new URL(request.url);
-			const path = url.pathname;
-			if (path.includes('images')) {
-				const headers = new Headers();
-				headers.set("content-type", "image/png");
-				const body = Deno.readFileSync('./public' + path);
-				const response = new Response(body, { status: 200, headers });
-				return response;
-			} else if (path.includes('scripts')) {
-				const headers = new Headers();
-				headers.set("content-type", "text/javascript");
-				const body = Deno.readTextFileSync('./public' + path);
-				const response = new Response(body, { status: 200, headers });
-				return response;
-			} else if (path.includes('sounds')) {
-				const headers = new Headers();
-				headers.set("content-type", "audio/mpeg");
-				const body = Deno.readFileSync('./public' + path);
-				const response = new Response(body, { status: 200, headers });
-				return response;
-			} else {
-				switch (path) {
-					case '/': {
-						const headers = new Headers();
-						headers.set("content-type", "text/html");
-						const body = Deno.readTextFileSync('./public/index.html');
-						const response = new Response(body, { status: 200, headers });
-						return response;
-					}
-					case '/manifest.json': {
-						const headers = new Headers();
-						headers.set("content-type", "application/json");
-						const body = Deno.readTextFileSync('./public/manifest.json');
-						const response = new Response(body, { status: 200, headers });
-						return response;
-					}
-					case '/styles.css': {
-						const headers = new Headers();
-						headers.set("content-type", "text/css");
-						const body = Deno.readTextFileSync('./public/styles.css');
-						const response = new Response(body, { status: 200, headers });
-						return response;
-					}
-					case '/service-worker.js': {
-						const headers = new Headers();
-						headers.set("content-type", "text/javascript");
-						const body = Deno.readTextFileSync('./public/service-worker.js');
-						const response = new Response(body, { status: 200, headers });
-						return response;
-					}
-					default: {
-						if (path.includes('server')) {
-							const requestClone = request.clone();
-							const { socket, response } = Deno.upgradeWebSocket(request);
-							socket.peerId = Peer.uuid();
-							socket.onopen = () => this._onConnection(new Peer(socket, requestClone, info));
-							console.log('Dropzone is running...');
-							return response;
-						} else {
-							const headers = new Headers();
-							headers.set("content-type", "text/html");
-							const body = "404 Not Found";
-							const response = new Response(body, { status: 200, headers });
-							return response;
-						}
-					}
-				}
-			}
-		})
-	}
-
-	_onConnection(peer) {
-		this._joinRoom(peer);
-		peer.socket.onmessage = (event) => this._onMessage(peer, event.data);
-		this._keepAlive(peer);
-
-		// send displayName
-		this._send(peer, {
-			type: 'display-name',
-			message: {
-				displayName: peer.name.displayName,
-				deviceName: peer.name.deviceName,
-				roomID: peer.rid
-			}
-		});
-	}
-
-	_onMessage(sender, message) {
-		// Try to parse message 
-		try {
-			message = JSON.parse(message);
-		} catch (_event) {
-			console.error('Invalid JSON', message);
-			return;
-		}
-
-		switch (message.type) {
-			case 'disconnect':
-				this._leaveRoom(sender);
-				break;
-			case 'pong':
-				sender.lastBeat = Date.now();
-				break;
-			case 'updateRID':
-				this._changeRoom(sender, message.rid);
-				break;
-		}
-
-		// relay message to recipient
-		if (message.to && this._rooms[sender.ip]) {
-			const recipientId = message.to; // TODO: sanitize
-			const recipient = this._rooms[sender.ip][recipientId];
-			delete message.to;
-			// add sender id
-			message.sender = sender.id;
-			this._send(recipient, message);
-			return;
-		}
-	}
-
-	_joinRoom(peer) {
-		// if room doesn't exist, create it
-		if (!this._rooms[peer.rid]) {
-			this._rooms[peer.rid] = {};
-		}
-
-		// notify all other peers
-		for (const otherPeerId in this._rooms[peer.rid]) {
-			const otherPeer = this._rooms[peer.rid][otherPeerId];
-			this._send(otherPeer, {
-				type: 'peer-joined',
-				peer: peer.getInfo()
-			});
-		}
-
-		// notify peer about the other peers
-		const otherPeers = [];
-		for (const otherPeerId in this._rooms[peer.rid]) {
-			otherPeers.push(this._rooms[peer.rid][otherPeerId].getInfo());
-		}
-
-		this._send(peer, {
-			type: 'peers',
-			peers: otherPeers
-		});
-
-		// add peer to room
-		this._rooms[peer.rid][peer.id] = peer;
-	}
-
-	_leaveRoom(peer, isChangeRoom = false) {
-		if (!this._rooms[peer.rid] || !this._rooms[peer.rid][peer.id]) return;
-		if (!isChangeRoom) {
-			this._cancelKeepAlive(this._rooms[peer.rid][peer.id]);
-			peer.socket.close();
-		}
-
-		// delete the peer
-		delete this._rooms[peer.rid][peer.id];
-
-		//if room is empty, delete the room
-		if (!Object.keys(this._rooms[peer.rid]).length) {
-			delete this._rooms[peer.rid];
-		} else {
-			// notify all other peers
-			for (const otherPeerId in this._rooms[peer.rid]) {
-				const otherPeer = this._rooms[peer.rid][otherPeerId];
-				this._send(otherPeer, { type: 'peer-left', peerId: peer.id });
-			}
-		}
-	}
-
-	_changeRoom(peer, rid) {
-		this._leaveRoom(peer, true);
-		peer.rid = rid;
-		this._joinRoom(peer);
-	}
-
-	_send(peer, message) {
-		if (!peer) return;
-		if (peer.socket.readyState !== peer.socket.OPEN) return;
-		message = JSON.stringify(message);
-		peer.socket.send(message, _error => '');
-	}
-
-	_keepAlive(peer) {
-		this._cancelKeepAlive(peer);
-		const timeout = 30000;
-		if (!peer.lastBeat) {
-			peer.lastBeat = Date.now();
-		}
-		if (Date.now() - peer.lastBeat > 2 * timeout) {
-			this._leaveRoom(peer);
-			return;
-		}
-
-		this._send(peer, { type: 'ping' });
-
-		peer.timerId = setTimeout(() => this._keepAlive(peer), timeout);
-	}
-
-	_cancelKeepAlive(peer) {
-		if (peer && peer.timerId) {
-			clearTimeout(peer.timerId);
-		}
-	}
-}
 class Peer {
-
 	constructor(socket, request, info) {
 		// set socket
 		this.socket = socket;
@@ -376,5 +163,218 @@ class Peer {
 		return uuid;
 	};
 }
+const testport = Math.random() > 0.5 ? 8080 : 8081;
+class DropzoneServer {
+	constructor() {
+		onProcess();
+		this._rooms = {};
+		Deno.serve({ port: testport }, (request, info) => {
+			const url = new URL(request.url);
+			const path = url.pathname;
+			if (path.includes('images')) {
+				const headers = new Headers();
+				headers.set("content-type", "image/png");
+				const body = Deno.readFileSync('./public' + path);
+				const response = new Response(body, { status: 200, headers });
+				return response;
+			} else if (path.includes('sounds')) {
+				const headers = new Headers();
+				headers.set("content-type", "audio/mpeg");
+				const body = Deno.readFileSync('./public' + path);
+				const response = new Response(body, { status: 200, headers });
+				return response;
+			} else {
+				switch (path) {
+					case '/': {
+						const headers = new Headers();
+						headers.set("content-type", "text/html");
+						const body = Deno.readTextFileSync('./public/index.html');
+						const response = new Response(body, { status: 200, headers });
+						return response;
+					}
+					case '/main.js': {
+						const headers = new Headers();
+						headers.set("content-type", "text/javascript");
+						const body = Deno.readTextFileSync('./public/main.js');
+						const response = new Response(body, { status: 200, headers });
+						return response;
+					}
+					case '/manifest.json': {
+						const headers = new Headers();
+						headers.set("content-type", "application/json");
+						const body = Deno.readTextFileSync('./public/manifest.json');
+						const response = new Response(body, { status: 200, headers });
+						return response;
+					}
+					case '/styles.css': {
+						const headers = new Headers();
+						headers.set("content-type", "text/css");
+						const body = Deno.readTextFileSync('./public/styles.css');
+						const response = new Response(body, { status: 200, headers });
+						return response;
+					}
+					case '/service-worker.js': {
+						const headers = new Headers();
+						headers.set("content-type", "text/javascript");
+						const body = Deno.readTextFileSync('./public/service-worker.js');
+						const response = new Response(body, { status: 200, headers });
+						return response;
+					}
+					default: {
+						if (path.includes('server')) {
+							const requestClone = request.clone();
+							const { socket, response } = Deno.upgradeWebSocket(request);
+							socket.peerId = Peer.uuid();
+							socket.onopen = () => this._onConnection(new Peer(socket, requestClone, info));
+							console.log(`WebSocket connection established: ${socket.peerId}`);
+							return response;
+						} else {
+							const headers = new Headers();
+							headers.set("content-type", "text/html");
+							const body = "404 Not Found";
+							const response = new Response(body, { status: 200, headers });
+							return response;
+						}
+					}
+				}
+			}
+		})
+	}
 
+	_onConnection(peer) {
+		this._joinRoom(peer);
+		peer.socket.onmessage = (event) => this._onMessage(peer, event.data);
+		this._keepAlive(peer);
+
+		// send displayName
+		this._send(peer, {
+			type: 'display-name',
+			message: {
+				displayName: peer.name.displayName,
+				deviceName: peer.name.deviceName,
+				roomID: peer.rid
+			}
+		});
+	}
+
+	_onMessage(sender, message) {
+		// Try to parse message 
+		try {
+			message = JSON.parse(message);
+		} catch (_event) {
+			console.error('Invalid JSON', message);
+			return;
+		}
+
+		switch (message.type) {
+			case 'disconnect':
+				this._leaveRoom(sender);
+				break;
+			case 'pong':
+				sender.lastBeat = Date.now();
+				break;
+			case 'updateRID':
+				this._changeRoom(sender, message.rid);
+				break;
+		}
+
+		// relay message to recipient
+		if (message.to && this._rooms[sender.rid]) {
+			const recipientId = message.to; // TODO: sanitize
+			const recipient = this._rooms[sender.rid][recipientId];
+			delete message.to;
+			// add sender id
+			message.sender = sender.id;
+			this._send(recipient, message);
+			return;
+		}
+	}
+
+	_joinRoom(peer) {
+		// if room doesn't exist, create it
+		if (!this._rooms[peer.rid]) {
+			this._rooms[peer.rid] = {};
+		}
+
+		// notify all other peers
+		for (const otherPeerId in this._rooms[peer.rid]) {
+			const otherPeer = this._rooms[peer.rid][otherPeerId];
+			this._send(otherPeer, {
+				type: 'peer-joined',
+				peer: peer.getInfo()
+			});
+		}
+
+		// notify peer about the other peers
+		const otherPeers = [];
+		for (const otherPeerId in this._rooms[peer.rid]) {
+			otherPeers.push(this._rooms[peer.rid][otherPeerId].getInfo());
+		}
+
+		this._send(peer, {
+			type: 'peers',
+			peers: otherPeers
+		});
+
+		// add peer to room
+		this._rooms[peer.rid][peer.id] = peer;
+	}
+
+	_leaveRoom(peer, isChangeRoom = false) {
+		if (!this._rooms[peer.rid] || !this._rooms[peer.rid][peer.id]) return;
+		if (!isChangeRoom) {
+			this._cancelKeepAlive(this._rooms[peer.rid][peer.id]);
+			peer.socket.close();
+		}
+
+		// delete the peer
+		delete this._rooms[peer.rid][peer.id];
+
+		//if room is empty, delete the room
+		if (!Object.keys(this._rooms[peer.rid]).length) {
+			delete this._rooms[peer.rid];
+		} else {
+			// notify all other peers
+			for (const otherPeerId in this._rooms[peer.rid]) {
+				const otherPeer = this._rooms[peer.rid][otherPeerId];
+				this._send(otherPeer, { type: 'peer-left', peerId: peer.id });
+			}
+		}
+	}
+
+	_changeRoom(peer, rid) {
+		this._leaveRoom(peer, true);
+		peer.rid = rid;
+		this._joinRoom(peer);
+	}
+
+	_send(peer, message) {
+		if (!peer) return;
+		if (peer.socket.readyState !== peer.socket.OPEN) return;
+		message = JSON.stringify(message);
+		peer.socket.send(message, _error => '');
+	}
+
+	_keepAlive(peer) {
+		this._cancelKeepAlive(peer);
+		const timeout = 30000;
+		if (!peer.lastBeat) {
+			peer.lastBeat = Date.now();
+		}
+		if (Date.now() - peer.lastBeat > 2 * timeout) {
+			this._leaveRoom(peer);
+			return;
+		}
+
+		this._send(peer, { type: 'ping' });
+
+		peer.timerId = setTimeout(() => this._keepAlive(peer), timeout);
+	}
+
+	_cancelKeepAlive(peer) {
+		if (peer && peer.timerId) {
+			clearTimeout(peer.timerId);
+		}
+	}
+}
 new DropzoneServer();

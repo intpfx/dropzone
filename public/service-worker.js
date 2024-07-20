@@ -1,12 +1,9 @@
-const CACHE_NAME = 'v0';
+const CACHE_NAME = 'v1';
 const urlsToCache = [
   './',
   'index.html',
   'styles.css',
-  'scripts/network.js',
-  'scripts/ui.js',
-  'scripts/clipboard.js',
-  'scripts/theme.js',
+  'main.js',
   'sounds/blop.mp3',
   'images/favicon-96x96.png'
 ];
@@ -41,7 +38,7 @@ self.addEventListener('activate', function (event) {
   event.waitUntil(
     caches.keys().then(function (cacheNames) {
       return Promise.all(
-        cacheNames.filter(function (cacheName) {
+        cacheNames.filter(function (_cacheName) {
           // Return true if you want to remove this cache,
           // but remember that caches are shared across
           // the whole origin
