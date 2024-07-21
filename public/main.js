@@ -1,3 +1,5 @@
+///<reference lib="dom" />
+
 const $ = query => document.getElementById(query);
 const $$ = query => document.body.querySelector(query);
 const isURL = text => /^((https?:\/\/|www)[^\s]+)/g.test(text.toLowerCase());
@@ -45,6 +47,12 @@ class ServerConnection {
 			case 'peers':
 				Events.fire('peers', msg.peers);
 				break;
+			case 'peer-online':
+				Events.fire('peer-online', msg.message);
+				break;
+			case 'peer-offline':
+				Events.fire('peer-offline', msg.message);
+				break;
 			case 'peer-joined':
 				Events.fire('peer-joined', msg.peer);
 				break;
@@ -86,7 +94,7 @@ class ServerConnection {
 
 	_onDisconnect() {
 		console.log('WS: server disconnected');
-		Events.fire('notify-user', 'Connection lost. Retry in 5 seconds...');
+		Events.fire('notify-user', '链接丢失. 5秒后重试...');
 		clearTimeout(this._reconnectTimer);
 		this._reconnectTimer = setTimeout(_ => this._connect(), 5000);
 	}
@@ -228,7 +236,7 @@ class Peer {
 		this._reader = null;
 		this._busy = false;
 		this._dequeueFile();
-		Events.fire('notify-user', 'File transfer completed.');
+		Events.fire('notify-user', '文件传输完成');
 	}
 
 	sendText(text) {
@@ -911,7 +919,7 @@ class ReceiveTextDialog extends Dialog {
 
 	async _onCopy() {
 		await navigator.clipboard.writeText(this.$text.textContent);
-		Events.fire('notify-user', 'Copied to clipboard');
+		Events.fire('notify-user', '已复制到剪贴板');
 	}
 }
 
@@ -922,14 +930,13 @@ class Toast extends Dialog {
 	}
 
 	_onNotfiy(message) {
-		this.$el.textContent = message;
+		this.$el.innerHTML = message;
 		this.show();
 		setTimeout(_ => this.hide(), 3000);
 	}
 }
 
 class Notifications {
-
 	constructor() {
 		// Check if the browser supports notifications
 		if (!('Notification' in window)) return;
@@ -947,7 +954,7 @@ class Notifications {
 	_requestPermission() {
 		Notification.requestPermission(permission => {
 			if (permission !== 'granted') {
-				Events.fire('notify-user', Notifications.PERMISSION_ERROR || 'Error');
+				Events.fire('notify-user', `通知权限已被阻止,<br/>因为用户已经多次取消了权限提示。<br/>这可以在页面信息中重置,<br/>可以通过点击URL旁边的锁图标来访问。` || 'Error');
 				return;
 			}
 			this._notify('Even more snappy sharing!');
@@ -1024,11 +1031,11 @@ class NetworkStatusUI {
 	}
 
 	_showOfflineMessage() {
-		Events.fire('notify-user', 'You are offline');
+		Events.fire('notify-user', '您已离线');
 	}
 
 	_showOnlineMessage() {
-		Events.fire('notify-user', 'You are back online');
+		Events.fire('notify-user', '您已重新联机');
 	}
 }
 
@@ -1076,6 +1083,7 @@ Events.on('display-name', e => {
 	$displayName.title = me.deviceName;
 
 	const $tip = $('tip');
+	$tip.setAttribute('placeholder', me.serverRegion);
 	const $roomID = $('roomID');
 	$roomID.textContent = me.roomID;
 	$roomID.addEventListener('focus', () => {
@@ -1154,6 +1162,16 @@ Events.on('load', () => {
 	animate();
 });
 
+Events.on('peer-online', e => {
+	const em = e.detail.message;
+	Events.fire('notify-user', `${em.displayName} 已在${em.serverRegion}上线`);
+});
+
+Events.on('peer-offline', e => {
+	const em = e.detail.message;
+	Events.fire('notify-user', `${em.displayName} 已在${em.serverRegion}下线`);
+});
+
 const dropzone = new Dropzone();
 
 if ('serviceWorker' in navigator) {
@@ -1175,12 +1193,6 @@ globalThis.addEventListener('beforeinstallprompt', e => {
 		return e.preventDefault();
 	}
 });
-
-Notifications.PERMISSION_ERROR = `
-Notifications permission has been blocked
-as the user has dismissed the permission prompt several times.
-This can be reset in Page Info
-which can be accessed by clicking the lock icon next to the URL.`;
 
 document.body.onclick = () => { // safari hack to fix audio
 	document.body.onclick = null;

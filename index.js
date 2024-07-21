@@ -2,6 +2,22 @@ import process from 'node:process'
 import parser from 'npm:ua-parser-js'
 import { uniqueNamesGenerator, animals, colors } from 'npm:unique-names-generator'
 
+const serverRegion = Deno.env.get("DENO_REGION") || 'local';
+const bus = new BroadcastChannel('bus');
+bus.onmessage = (event) => {
+	const { type, message } = event.data;
+	switch (type) {
+		case 'peer-online': {
+			bus.dispatchEvent(new CustomEvent('peer-online', { detail: message }));
+			break;
+		}
+		case 'peer-offline': {
+			bus.dispatchEvent(new CustomEvent('peer-offline', { detail: message }));
+			break;
+		}
+	}
+};
+
 function onProcess() {
 	process.on('SIGINT', () => {
 		console.info("SIGINT Received, exiting...")
@@ -49,10 +65,8 @@ class Peer {
 	constructor(socket, request, info) {
 		// set socket
 		this.socket = socket;
-
 		// set remote ip
 		this._setIP(request, info);
-
 		// set peer id
 		this._setPeerId(socket);
 		// set room id
@@ -163,12 +177,11 @@ class Peer {
 		return uuid;
 	};
 }
-const testport = Math.random() > 0.5 ? 8080 : 8081;
-class DropzoneServer {
+class Server {
 	constructor() {
 		onProcess();
 		this._rooms = {};
-		Deno.serve({ port: testport }, (request, info) => {
+		Deno.serve((request, info) => {
 			const url = new URL(request.url);
 			const path = url.pathname;
 			if (path.includes('images')) {
@@ -252,7 +265,40 @@ class DropzoneServer {
 			message: {
 				displayName: peer.name.displayName,
 				deviceName: peer.name.deviceName,
-				roomID: peer.rid
+				roomID: peer.rid,
+				serverRegion: serverRegion
+			}
+		});
+
+		bus.addEventListener('peer-online', (event) => {
+			for (const roomId in this._rooms) {
+				for (const peerId in this._rooms[roomId]) {
+					const otherPeer = this._rooms[roomId][peerId];
+					this._send(otherPeer, {
+						type: 'peer-online',
+						message: event.detail
+					});
+				}
+			}
+		});
+
+		bus.addEventListener('peer-offline', (event) => {
+			for (const roomId in this._rooms) {
+				for (const peerId in this._rooms[roomId]) {
+					const otherPeer = this._rooms[roomId][peerId];
+					this._send(otherPeer, {
+						type: 'peer-offline',
+						message: event.detail
+					});
+				}
+			}
+		});
+
+		bus.postMessage({
+			type: 'peer-online',
+			message: {
+				displayName: peer.name.displayName,
+				serverRegion: serverRegion
 			}
 		});
 	}
@@ -269,6 +315,13 @@ class DropzoneServer {
 		switch (message.type) {
 			case 'disconnect':
 				this._leaveRoom(sender);
+				bus.postMessage({
+					type: 'peer-offline',
+					message: {
+						displayName: sender.name.displayName,
+						serverRegion: serverRegion
+					}
+				});
 				break;
 			case 'pong':
 				sender.lastBeat = Date.now();
@@ -377,4 +430,4 @@ class DropzoneServer {
 		}
 	}
 }
-new DropzoneServer();
+new Server();

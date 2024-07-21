@@ -8,6 +8,8 @@
 
 - 🌖 去除原项目中导入的第三方库，使用Deno原生API替代。
 - 🌗 使用现代ES6+语法重构代码。
+- 🌘 完善WSPeer。
+- 🌘 使用Deno的BroadcastChannel API完成不同区域Peer之间的通讯。
 - ...
 
 ## 欢迎贡献
