@@ -1163,13 +1163,13 @@ Events.on('load', () => {
 });
 
 Events.on('peer-online', e => {
-	const em = e.detail.message;
-	Events.fire('notify-user', `${em.displayName} 已在${em.serverRegion}上线`);
+	const ed = e.detail;
+	Events.fire('notify-user', `${ed.displayName} 已在${ed.serverRegion}上线`);
 });
 
 Events.on('peer-offline', e => {
-	const em = e.detail.message;
-	Events.fire('notify-user', `${em.displayName} 已在${em.serverRegion}下线`);
+	const ed = e.detail;
+	Events.fire('notify-user', `${ed.displayName} 已在${ed.serverRegion}下线`);
 });
 
 const dropzone = new Dropzone();
