@@ -1,0 +1,17 @@
+{
+  "configurations": [
+    {
+      "name": "Dropzone",
+      "request": "launch",
+      "type": "node",
+      "cwd": "${workspaceFolder:dropzone}",
+      "runtimeExecutable": "deno",
+      "runtimeArgs": [
+        "--unstable-broadcast-channel",
+        "index.js"
+      ],
+      "internalConsoleOptions": "neverOpen",
+      "console": "integratedTerminal"
+    }
+  ]
+}
